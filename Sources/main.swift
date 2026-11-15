@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import UserNotifications
 import WebKit
 import UniformTypeIdentifiers
 
@@ -80,6 +82,147 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
+    // MARK: PATCH 4 — reliable microphone/camera permission
+
+    /// WebKit has a known issue where getUserMedia() silently hangs without
+    /// ever showing a prompt when this delegate method is missing. Granting at
+    /// the web layer makes the regular macOS system prompt (TCC) appear
+    /// reliably; the OS itself remains the real gatekeeper for mic/camera.
+    func webView(_ webView: WKWebView,
+                 requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        print("🎤 MEDIATOEGANG GEVRAAGD voor \(origin.host)")
+        decisionHandler(.grant)
+    }
+
+    /// Pre-authorize the microphone at the macOS level (App-menu item), so the
+    /// system prompt can be answered before using voice features.
+    func requestMicAccess() {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            print("🎤 Microfoon al toegestaan")
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                print(granted ? "🎤 Microfoon toegestaan" : "🎤 Microfoon geweigerd")
+            }
+        default:
+            print("🎤 Eerder geweigerd — zet aan via Systeeminstellingen → Privacy & Beveiliging → Microfoon")
+        }
+    }
+
+    // MARK: PATCH 5 — open page in browser / copy link
+
+    func openInBrowser() {
+        guard let url = webView.url,
+              let scheme = url.scheme, scheme == "http" || scheme == "https" else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func copyPageLink() {
+        guard let url = webView.url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+    }
+
+    // MARK: PATCH 6 — find in page (⌘F)
+    // macOS has no public WKWebView find API (findString/WKFindConfiguration
+    // are iOS-only) and window.find() is non-functional in WKWebView, so this
+    // uses a self-contained JavaScript highlighter instead.
+
+    private static let findScript = #"""
+(function() {
+    var query = window.__vibeQuery || "";
+    if (!query) {
+        if (window.__vibeCleanup) { window.__vibeCleanup(); }
+        return 0;
+    }
+    if (window.__vibeLast === query && window.__vibeMarks && window.__vibeMarks.length) {
+        window.__vibeIdx = (window.__vibeIdx + 1) % window.__vibeMarks.length;
+        window.__vibeMarks[window.__vibeIdx].scrollIntoView({block: "center", behavior: "smooth"});
+        return window.__vibeMarks.length;
+    }
+    if (window.__vibeCleanup) { window.__vibeCleanup(); }
+    var re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: function(n) {
+            if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+            var p = n.parentNode;
+            while (p && p !== document.body) {
+                var t = p.nodeName;
+                if (t === "SCRIPT" || t === "STYLE" || t === "NOSCRIPT" || t === "INPUT" || t === "TEXTAREA") return NodeFilter.FILTER_REJECT;
+                p = p.parentNode;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+        }
+    });
+    var nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    var marks = [];
+    nodes.forEach(function(node) {
+        var remaining = node;
+        var text = remaining.nodeValue;
+        var match;
+        while ((match = re.exec(text)) !== null) {
+            var after = remaining.splitText(match.index);
+            var rest = after.splitText(match[0].length);
+            var mark = document.createElement("mark");
+            mark.className = "__vibe_mark";
+            mark.style.cssText = "background:#ffe066;color:#000;border-radius:2px;";
+            mark.appendChild(document.createTextNode(after.nodeValue));
+            after.parentNode.replaceChild(mark, after);
+            marks.push(mark);
+            remaining = rest;
+            text = remaining.nodeValue;
+            re.lastIndex = 0;
+        }
+    });
+    window.__vibeMarks = marks;
+    window.__vibeLast = query;
+    window.__vibeIdx = marks.length ? 0 : -1;
+    window.__vibeCleanup = function() {
+        document.querySelectorAll("mark.__vibe_mark").forEach(function(mk) {
+            var parent = mk.parentNode;
+            if (!parent) return;
+            while (mk.firstChild) parent.insertBefore(mk.firstChild, mk);
+            parent.removeChild(mk);
+            parent.normalize();
+        });
+        window.__vibeMarks = null;
+        window.__vibeLast = null;
+        window.__vibeCleanup = null;
+    };
+    if (marks.length) { marks[0].scrollIntoView({block: "center", behavior: "smooth"}); }
+    return marks.length;
+})()
+"""#
+
+    func findInPage() {
+        let alert = NSAlert()
+        alert.messageText = "Find in Page"
+        alert.informativeText = "Enter a search term and click Find.\nPress ⌘F again (same term) to jump to the next match.\nLeave the field empty and click Find to clear all highlights."
+        alert.addButton(withTitle: "Find")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let query = field.stringValue
+        let escaped = query
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        webView.evaluateJavaScript("window.__vibeQuery = \"\(escaped)\"", completionHandler: nil)
+        webView.evaluateJavaScript(Self.findScript) { result, error in
+            if let error {
+                print("🔍 Find error: \(error.localizedDescription)")
+            } else if !query.isEmpty, let count = result as? Int, count == 0 {
+                NSSound.beep()
+            }
+        }
+    }
+
     private func isInternal(_ url: URL) -> Bool {
         guard let host = url.host else { return true } // about:blank etc.
         return Config.internalHosts.contains { host == $0 || host.hasSuffix("." + $0) }
@@ -126,6 +269,17 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             decisionHandler(.allow, preferences); return
         }
         print("🔄 NAVIGATIE: type=\(navigationAction.navigationType.rawValue) hoofframe=\(navigationAction.targetFrame?.isMainFrame ?? false) url=\(url.absoluteString.prefix(80))")
+
+        // PATCH: bijlage-downloads van Vibe (chat.mistral.ai/api/files/...)
+        // zijn JS-navigaties met een "toonbaar" MIME-type (bv. text/x-swift),
+        // waardoor WebKit de inhoud toont i.p.v. te downloaden. Forceer
+        // daarom het download-pad voor deze URL's.
+        if let host = url.host, host.hasSuffix("mistral.ai"),
+           url.path.hasPrefix("/api/files/") {
+            print("⬇️ BESTAND HERKEND ALS DOWNLOAD: \(url.absoluteString.prefix(80))")
+            decisionHandler(.download, preferences)
+            return
+        }
 
         // PATCH: data:-URL's (canvas-exporten) opslaan als bestand i.p.v. in de
         // app weer te geven. WebKit toont een data-PDF anders "gewoon", zonder
@@ -206,7 +360,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     // File picker for uploads (attaching files in chat)
     func webView(_ webView: WKWebView,
                  runOpenPanelWith parameters: WKOpenPanelParameters,
-                 initiatedForFrame frame: WKFrameInfo,
+                 initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping ([URL]?) -> Void) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
@@ -263,7 +417,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
 // MARK: - App Delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     private var window: NSWindow!
     private var controller: WebViewController!
 
@@ -292,6 +446,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         buildMenu()
         NSApp.activate(ignoringOtherApps: true)
+
+        // PATCH 7 — notifications: register this app with the macOS
+        // notification center so web notifications can appear while the app
+        // is in the foreground (best effort; delivery also depends on macOS).
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error {
+                print("🔔 Notificatiefout: \(error.localizedDescription)")
+            } else {
+                print(granted ? "🔔 Notificaties toegestaan" : "🔔 Notificaties geweigerd")
+            }
+        }
+    }
+
+    /// Show notifications as banners even when the app is frontmost.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 
     // Keep the app alive when the window is closed (it's only hidden, see below).
@@ -328,6 +501,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenuItem.submenu = appMenu
         appMenu.addItem(withTitle: "About \(Config.appName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Enable Microphone Access…", action: #selector(requestMicAccess), keyEquivalent: "")
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide \(Config.appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
@@ -362,6 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomIn), keyEquivalent: "+")
         viewMenu.addItem(withTitle: "Zoom Out", action: #selector(zoomOut), keyEquivalent: "-")
         viewMenu.addItem(withTitle: "Actual Size", action: #selector(zoomReset), keyEquivalent: "0")
+        viewMenu.addItem(withTitle: "Find…", action: #selector(findInPage), keyEquivalent: "f")
         viewMenu.addItem(.separator())
         let back = viewMenu.addItem(withTitle: "Back", action: #selector(goBack), keyEquivalent: "[")
         back.keyEquivalentModifierMask = [.command]
@@ -379,6 +555,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // PATCH: Downloads shortcut (Cmd+J) — shows the most recent downloads
         // in Finder, or opens ~/Downloads if nothing was downloaded yet.
         goMenu.addItem(withTitle: "Downloads", action: #selector(showDownloads), keyEquivalent: "j")
+        goMenu.addItem(.separator())
+        let openBrowser = goMenu.addItem(withTitle: "Open Page in Browser", action: #selector(openInBrowser), keyEquivalent: "b")
+        openBrowser.keyEquivalentModifierMask = [.command, .shift]
+        goMenu.addItem(withTitle: "Copy Page Link", action: #selector(copyPageLink), keyEquivalent: "")
 
         // Window menu
         let windowMenuItem = NSMenuItem()
@@ -399,6 +579,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func zoomOut() { controller.zoomOut() }
     @objc private func zoomReset() { controller.zoomReset() }
     @objc private func showDownloads() { controller.showDownloads() }
+    @objc private func requestMicAccess() { controller.requestMicAccess() }
+    @objc private func findInPage() { controller.findInPage() }
+    @objc private func openInBrowser() { controller.openInBrowser() }
+    @objc private func copyPageLink() { controller.copyPageLink() }
 }
 
 // MARK: - Entry point
