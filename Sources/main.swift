@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import UniformTypeIdentifiers
 
 // MARK: - Configuration
 
@@ -25,6 +26,7 @@ enum Config {
 final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
 
     private(set) var webView: WKWebView!
+    private var recentDownloads: [URL] = []
 
     override func loadView() {
         let config = WKWebViewConfiguration()
@@ -63,10 +65,55 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     func goHome() { webView.load(URLRequest(url: Config.homeURL)) }
     func goBack() { if webView.canGoBack { webView.goBack() } }
     func goForward() { if webView.canGoForward { webView.goForward() } }
+    func zoomIn() { webView.pageZoom += 0.1 }
+    func zoomOut() { webView.pageZoom = max(0.5, webView.pageZoom - 0.1) }
+    func zoomReset() { webView.pageZoom = 1.0 }
+
+    /// Show the most recent downloads in Finder (menu item / ⌘J).
+    /// Falls back to opening ~/Downloads when nothing was downloaded yet.
+    func showDownloads() {
+        if !recentDownloads.isEmpty {
+            NSWorkspace.shared.activateFileViewerSelecting(recentDownloads)
+        } else if let downloads = FileManager.default.urls(for: .downloadsDirectory,
+                                                           in: .userDomainMask).first {
+            NSWorkspace.shared.open(downloads)
+        }
+    }
 
     private func isInternal(_ url: URL) -> Bool {
         guard let host = url.host else { return true } // about:blank etc.
         return Config.internalHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
+    /// PATCH: data:-URL's (canvas-exporten) bevatten het hele bestand base64-
+    /// gecodeerd in de link. WebKit probeert ze weer te geven in plaats van te
+    /// downloaden; hier worden ze handmatig gedecodeerd en opgeslagen.
+    private static func saveDataURL(_ url: URL, to downloads: URL) -> URL? {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let raw = comps.percentEncodedPath + (comps.percentEncodedQuery.map { "?" + $0 } ?? "")
+        guard let comma = raw.firstIndex(of: ",") else { return nil }
+        let meta = String(raw[raw.startIndex..<comma])
+        let payload = String(raw[raw.index(after: comma)...])
+        let parts = meta.split(separator: ";")
+        let mime = parts.first.flatMap { $0.isEmpty ? nil : String($0) } ?? "application/octet-stream"
+        let isBase64 = parts.dropFirst().contains { $0.lowercased() == "base64" }
+        let data = isBase64
+            ? Data(base64Encoded: payload)
+            : payload.removingPercentEncoding?.data(using: .utf8)
+        guard let data, !data.isEmpty else { return nil }
+        let ext = UTType(mimeType: mime)?.preferredFilenameExtension ?? "bin"
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HHmmss"
+        var dest = downloads.appendingPathComponent("Vibe-download \(df.string(from: Date())).\(ext)")
+        var i = 1
+        while FileManager.default.fileExists(atPath: dest.path) { i += 1; dest = downloads.appendingPathComponent("Vibe-download \(df.string(from: Date())) \(i).\(ext)") }
+        do {
+            try data.write(to: dest, options: .atomic)
+            return dest
+        } catch {
+            print("❌ DATA-URL SCHRIJFFOUT: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     // MARK: WKNavigationDelegate
@@ -77,6 +124,25 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
                  decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
         guard let url = navigationAction.request.url else {
             decisionHandler(.allow, preferences); return
+        }
+        print("🔄 NAVIGATIE: type=\(navigationAction.navigationType.rawValue) hoofframe=\(navigationAction.targetFrame?.isMainFrame ?? false) url=\(url.absoluteString.prefix(80))")
+
+        // PATCH: data:-URL's (canvas-exporten) opslaan als bestand i.p.v. in de
+        // app weer te geven. WebKit toont een data-PDF anders "gewoon", zonder
+        // dat er ooit een download plaatsvindt.
+        if url.scheme?.lowercased() == "data" {
+            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            if let dest = Self.saveDataURL(url, to: downloads) {
+                recentDownloads.append(dest)
+                if recentDownloads.count > 10 { recentDownloads.removeFirst(recentDownloads.count - 10) }
+                print("✅ DATA-URL OPGESLAGEN: \(dest.path)")
+                NSWorkspace.shared.activateFileViewerSelecting([dest])
+            } else {
+                print("❌ DATA-URL NIET OPGESLOPEN")
+            }
+            decisionHandler(.cancel, preferences)
+            return
         }
 
         // Only redirect to the external browser for explicit user clicks on
@@ -95,6 +161,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        print("📄 ANTWOORD: mime=\(navigationResponse.response.mimeType ?? "onbekend") toonbaar=\(navigationResponse.canShowMIMEType)")
         if navigationResponse.canShowMIMEType {
             decisionHandler(.allow)
         } else {
@@ -120,8 +187,14 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
+        print("🪟 NIEUW VENSTER: \(navigationAction.request.url?.absoluteString ?? "geen url")")
         if let url = navigationAction.request.url {
-            if isInternal(url) {
+            // PATCH: blob: and data: URLs (used by canvas exports / JS-initiated
+            // downloads) are loaded in the main view, so the download delegate
+            // can handle them and Finder opens when finished. Everything else
+            // non-internal still goes to the default browser.
+            let scheme = url.scheme?.lowercased() ?? ""
+            if isInternal(url) || scheme == "blob" || scheme == "data" {
                 webView.load(URLRequest(url: url))
             } else {
                 NSWorkspace.shared.open(url)
@@ -133,7 +206,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     // File picker for uploads (attaching files in chat)
     func webView(_ webView: WKWebView,
                  runOpenPanelWith parameters: WKOpenPanelParameters,
-                 initiatedByFrame frame: WKFrameInfo,
+                 initiatedForFrame frame: WKFrameInfo,
                  completionHandler: @escaping ([URL]?) -> Void) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
@@ -150,14 +223,22 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
                   decideDestinationUsing response: URLResponse,
                   suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
+        print("⬇️ DOWNLOAD GESTART: \(suggestedFilename)")
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        var dest = downloads.appendingPathComponent(suggestedFilename)
+        // PATCH: sanitize the server-suggested filename so it can never
+        // contain path components like "../" (path traversal hardening).
+        let safeName = ((suggestedFilename as NSString).lastPathComponent as NSString)
+        let baseName = safeName.deletingPathExtension
+        let ext = safeName.pathExtension
+        if baseName.isEmpty && ext.isEmpty {
+            completionHandler(downloads.appendingPathComponent("Download"))
+            return
+        }
+        var dest = downloads.appendingPathComponent(baseName + (ext.isEmpty ? "" : "." + ext))
         var i = 1
-        let base = dest.deletingPathExtension().lastPathComponent
-        let ext = dest.pathExtension
         while FileManager.default.fileExists(atPath: dest.path) {
-            let name = ext.isEmpty ? "\(base) \(i)" : "\(base) \(i).\(ext)"
+            let name = ext.isEmpty ? "\(baseName) \(i)" : "\(baseName) \(i).\(ext)"
             dest = downloads.appendingPathComponent(name)
             i += 1
         }
@@ -166,11 +247,15 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
     func download(_ download: WKDownload, didFailWithError error: Error,
                   resumeData: Data?) {
+        print("❌ DOWNLOAD MISLUKT: \(error.localizedDescription)")
         NSSound.beep()
     }
 
     func downloadDidFinish(_ download: WKDownload) {
+        print("✅ DOWNLOAD KLAAR: \(download.progress.fileURL?.path ?? "onbekend pad")")
         if let url = download.progress.fileURL {
+            recentDownloads.append(url)
+            if recentDownloads.count > 10 { recentDownloads.removeFirst(recentDownloads.count - 10) }
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
@@ -223,8 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // Re-show the window when the Dock icon is clicked.
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -270,7 +355,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let viewMenu = NSMenu(title: "View")
         viewMenuItem.submenu = viewMenu
         viewMenu.addItem(withTitle: "Reload", action: #selector(reload), keyEquivalent: "r")
-        viewMenu.addItem(withTitle: "Home", action: #selector(goHome), keyEquivalent: "0")
+        let home = viewMenu.addItem(withTitle: "Home", action: #selector(goHome), keyEquivalent: "h")
+        home.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(.separator())
+        // PATCH: page zoom shortcuts (Cmd+ / Cmd- / Cmd0)
+        viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomIn), keyEquivalent: "+")
+        viewMenu.addItem(withTitle: "Zoom Out", action: #selector(zoomOut), keyEquivalent: "-")
+        viewMenu.addItem(withTitle: "Actual Size", action: #selector(zoomReset), keyEquivalent: "0")
         viewMenu.addItem(.separator())
         let back = viewMenu.addItem(withTitle: "Back", action: #selector(goBack), keyEquivalent: "[")
         back.keyEquivalentModifierMask = [.command]
@@ -280,6 +371,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
 
+        // Go menu
+        let goMenuItem = NSMenuItem()
+        mainMenu.addItem(goMenuItem)
+        let goMenu = NSMenu(title: "Go")
+        goMenuItem.submenu = goMenu
+        // PATCH: Downloads shortcut (Cmd+J) — shows the most recent downloads
+        // in Finder, or opens ~/Downloads if nothing was downloaded yet.
+        goMenu.addItem(withTitle: "Downloads", action: #selector(showDownloads), keyEquivalent: "j")
+
         // Window menu
         let windowMenuItem = NSMenuItem()
         mainMenu.addItem(windowMenuItem)
@@ -287,7 +387,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         windowMenuItem.submenu = windowMenu
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
-        NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = mainMenu
     }
@@ -296,6 +395,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func goHome() { controller.goHome() }
     @objc private func goBack() { controller.goBack() }
     @objc private func goForward() { controller.goForward() }
+    @objc private func zoomIn() { controller.zoomIn() }
+    @objc private func zoomOut() { controller.zoomOut() }
+    @objc private func zoomReset() { controller.zoomReset() }
+    @objc private func showDownloads() { controller.showDownloads() }
 }
 
 // MARK: - Entry point
