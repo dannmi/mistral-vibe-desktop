@@ -7,35 +7,73 @@ SVG="$WORK/icon.svg"
 ICONSET="$WORK/AppIcon.iconset"
 mkdir -p "$ICONSET"
 
-# Mistral-inspired stacked color bars on a rounded square.
+# Mistral "M" letterform in pixel style: two verticals with a V dipping to
+# the middle, colored in Mistral's yellow-to-red vertical flow, with per-row
+# gradients, rounded blocks, soft depth shadows and a subtle glow background.
 cat > "$SVG" <<'EOF'
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1a1a1a"/>
-      <stop offset="1" stop-color="#000000"/>
+      <stop offset="0" stop-color="#2E2F36"/>
+      <stop offset="1" stop-color="#0D0E12"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#FF7A00" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FF7A00" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="g0" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE873"/>
+      <stop offset="1" stop-color="#FFC90A"/>
+    </linearGradient>
+    <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD24D"/>
+      <stop offset="1" stop-color="#FFAF00"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF9E2E"/>
+      <stop offset="1" stop-color="#FF7300"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF6242"/>
+      <stop offset="1" stop-color="#F51F00"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF4225"/>
+      <stop offset="1" stop-color="#E00900"/>
     </linearGradient>
   </defs>
-  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
-  <g transform="translate(232,300)">
-    <rect x="0"   y="0"   width="112" height="112" fill="#FFD300"/>
-    <rect x="112" y="0"   width="112" height="112" fill="#FFD300"/>
-    <rect x="336" y="0"   width="112" height="112" fill="#FFD300"/>
-    <rect x="448" y="0"   width="112" height="112" fill="#FFD300"/>
-
-    <rect x="0"   y="112" width="112" height="112" fill="#FFAF00"/>
-    <rect x="112" y="112" width="112" height="112" fill="#FF8205"/>
-    <rect x="336" y="112" width="112" height="112" fill="#FF8205"/>
-    <rect x="448" y="112" width="112" height="112" fill="#FA500F"/>
-
-    <rect x="0"   y="224" width="112" height="112" fill="#FA500F"/>
-    <rect x="112" y="224" width="112" height="112" fill="#FA500F"/>
-    <rect x="224" y="224" width="112" height="112" fill="#E10500"/>
-    <rect x="336" y="224" width="112" height="112" fill="#E10500"/>
-    <rect x="448" y="224" width="112" height="112" fill="#E10500"/>
-
-    <rect x="0"   y="336" width="112" height="112" fill="#E10500"/>
-    <rect x="448" y="336" width="112" height="112" fill="#E10500"/>
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="230" fill="url(#glow)"/>
+  <rect x="3" y="3" width="1018" height="1018" rx="228" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="3"/>
+  <g transform="translate(176,176)">
+    <g fill="#000000" fill-opacity="0.32">
+      <rect x="0"   y="12"  width="112" height="112" rx="26"/>
+      <rect x="560" y="12"  width="112" height="112" rx="26"/>
+      <rect x="0"   y="152" width="112" height="112" rx="26"/>
+      <rect x="140" y="152" width="112" height="112" rx="26"/>
+      <rect x="420" y="152" width="112" height="112" rx="26"/>
+      <rect x="560" y="152" width="112" height="112" rx="26"/>
+      <rect x="0"   y="292" width="112" height="112" rx="26"/>
+      <rect x="280" y="292" width="112" height="112" rx="26"/>
+      <rect x="560" y="292" width="112" height="112" rx="26"/>
+      <rect x="0"   y="432" width="112" height="112" rx="26"/>
+      <rect x="560" y="432" width="112" height="112" rx="26"/>
+      <rect x="0"   y="572" width="112" height="112" rx="26"/>
+      <rect x="560" y="572" width="112" height="112" rx="26"/>
+    </g>
+    <rect x="0"   y="0"   width="112" height="112" rx="26" fill="url(#g0)"/>
+    <rect x="560" y="0"   width="112" height="112" rx="26" fill="url(#g0)"/>
+    <rect x="0"   y="140" width="112" height="112" rx="26" fill="url(#g1)"/>
+    <rect x="140" y="140" width="112" height="112" rx="26" fill="url(#g1)"/>
+    <rect x="420" y="140" width="112" height="112" rx="26" fill="url(#g1)"/>
+    <rect x="560" y="140" width="112" height="112" rx="26" fill="url(#g1)"/>
+    <rect x="0"   y="280" width="112" height="112" rx="26" fill="url(#g2)"/>
+    <rect x="280" y="280" width="112" height="112" rx="26" fill="url(#g2)"/>
+    <rect x="560" y="280" width="112" height="112" rx="26" fill="url(#g2)"/>
+    <rect x="0"   y="420" width="112" height="112" rx="26" fill="url(#g3)"/>
+    <rect x="560" y="420" width="112" height="112" rx="26" fill="url(#g3)"/>
+    <rect x="0"   y="560" width="112" height="112" rx="26" fill="url(#g4)"/>
+    <rect x="560" y="560" width="112" height="112" rx="26" fill="url(#g4)"/>
   </g>
 </svg>
 EOF
