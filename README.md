@@ -1,6 +1,6 @@
 # Mistral Vibe for macOS — dannmi fork
 
-A native macOS desktop app for [Mistral Vibe](https://chat.mistral.ai/) (formerly Le Chat), built without Electron. This is a personal fork of [Alyetama/mistral-vibe-desktop](https://github.com/Alyetama/mistral-vibe-desktop) with additional fixes and features. Current version: **1.2.0 (4)**, maintained on the `versie-2` branch.
+A native macOS desktop app for [Mistral Vibe](https://chat.mistral.ai/) (formerly Le Chat), built without Electron. This is a personal fork of [Alyetama/mistral-vibe-desktop](https://github.com/Alyetama/mistral-vibe-desktop) with additional fixes and features. Current version: **1.3.0 (6)**, maintained on the `versie-2` branch.
 
 It wraps the Vibe web app in the system `WKWebView`, so it uses macOS's built-in WebKit instead of shipping a copy of Chromium. The result is a real `.app` that launches instantly, keeps you signed in, and weighs a fraction of a typical web wrapper.
 
@@ -9,7 +9,7 @@ It wraps the Vibe web app in the system `WKWebView`, so it uses macOS's built-in
 | **Engine**       | System WebKit (`WKWebView`) — no bundled browser |
 | **Architecture** | Universal — Apple Silicon and Intel              |
 | **Minimum OS**   | macOS 12 (Monterey)                              |
-| **Version**      | 1.2.0 (4)                                        |
+| **Version**      | 1.3.0 (6)                                        |
 
 ## What this fork adds
 
@@ -26,6 +26,10 @@ The app registers itself with the macOS notification center (via `UNUserNotifica
 ### Find in page — v1.2.0
 
 **⌘F** opens a search dialog that highlights all matches in the page (yellow, case-insensitive) and scrolls to the first one. Repeat **⌘F** with the same term to jump to the next match; clear the field to remove all highlights. macOS exposes no public find API on `WKWebView` (`findString`/`WKFindConfiguration` are iOS-only and `window.find()` is non-functional in WKWebView), so this uses a self-contained JavaScript highlighter.
+
+### External links open in your browser — v1.3.0
+
+Every link in an answer — whether a normal click or a link the web app opens through JavaScript — opens in a new tab of your default browser when it points outside the Vibe app itself. This includes `mistral.ai` subdomains such as `docs.mistral.ai` and normal `github.com` links, which stayed inside the app in earlier versions. Only the Vibe web app (`chat.mistral.ai`), its login flow, the auth providers and GitHub's OAuth connect flow used by Code Mode stay in the app; **⇧⌘B** still opens the current page in your browser.
 
 ### Open in browser / copy link — v1.2.0
 
@@ -61,7 +65,7 @@ Canvas exports arrive as `data:` URLs, which WebKit tries to *display* instead o
 - Stays signed in across launches (persistent cookie and local storage).
 - Native menu bar with the shortcuts you expect — reload, history, full screen, and standard editing commands.
 - File uploads through the native open panel; downloads land in `~/Downloads`.
-- Links to Vibe and its sign-in providers stay in the app; everything else opens in your default browser.
+- Links to Vibe and its sign-in providers stay in the app; everything else opens in your default browser (see v1.3.0 above).
 - Closing the window keeps the app running in the Dock with your session intact; reopen it from the Dock icon, or quit with Command-Q.
 - Window size and position are remembered between sessions.
 

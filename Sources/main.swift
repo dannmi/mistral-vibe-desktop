@@ -9,16 +9,15 @@ import UniformTypeIdentifiers
 enum Config {
     static let appName = "Vibe"
     static let homeURL = URL(string: "https://chat.mistral.ai/")!
-    // Keep navigation inside the app for these hosts; everything else opens in
-    // the user's default browser.
-    static let internalHosts: Set<String> = [
+    // Hosts that stay inside the app: the Vibe web app itself and the login
+    // flow. Every other link — including mistral.ai subdomains such as
+    // docs.mistral.ai, and github.com — opens in the default browser.
+    static let appHosts: Set<String> = [
         "chat.mistral.ai",
-        "mistral.ai",
         "auth.mistral.ai",
         // Auth providers used by Mistral's login flow:
         "accounts.google.com",
         "appleid.apple.com",
-        "github.com",
         "login.microsoftonline.com"
     ]
 }
@@ -223,9 +222,15 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    private func isInternal(_ url: URL) -> Bool {
+    private func isAppHost(_ url: URL) -> Bool {
         guard let host = url.host else { return true } // about:blank etc.
-        return Config.internalHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+        // GitHub stays in-app only for the OAuth connect flow of Code Mode
+        // (github.com/login, github.com/oauth); normal github.com links
+        // (repositories, pull requests, …) open in the default browser.
+        if host == "github.com" || host.hasSuffix(".github.com") {
+            return url.path.hasPrefix("/login") || url.path.hasPrefix("/oauth")
+        }
+        return Config.appHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     /// PATCH: data:-URL's (canvas-exporten) bevatten het hele bestand base64-
@@ -299,12 +304,18 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             return
         }
 
-        // Only redirect to the external browser for explicit user clicks on
-        // non-internal links. Let downloads, redirects, subframes stay in-app.
-        if navigationAction.navigationType == .linkActivated,
-           navigationAction.targetFrame?.isMainFrame == true,
-           !isInternal(url),
-           let scheme = url.scheme, scheme == "http" || scheme == "https" {
+        // PATCH 1.3.0: every link clicked in an answer — whether a normal link
+        // click or a JS-initiated navigation by the web app — opens in a new
+        // tab of the default browser when it points outside the Vibe app
+        // itself. This includes mistral.ai subdomains (docs.mistral.ai …) and
+        // github.com, which the old whitelist kept in-app. Downloads keep
+        // their own (earlier) paths and popups go through createWebViewWith.
+        if navigationAction.targetFrame?.isMainFrame == true,
+           !navigationAction.shouldPerformDownload,
+           navigationAction.navigationType == .linkActivated || navigationAction.navigationType == .other,
+           let scheme = url.scheme, scheme == "http" || scheme == "https",
+           !isAppHost(url) {
+            print("🌐 NAAR BROWSER: \(url.absoluteString.prefix(80))")
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel, preferences)
             return
@@ -348,7 +359,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             // can handle them and Finder opens when finished. Everything else
             // non-internal still goes to the default browser.
             let scheme = url.scheme?.lowercased() ?? ""
-            if isInternal(url) || scheme == "blob" || scheme == "data" {
+            if isAppHost(url) || scheme == "blob" || scheme == "data" {
                 webView.load(URLRequest(url: url))
             } else {
                 NSWorkspace.shared.open(url)
